@@ -47,24 +47,24 @@ fn collect_deps(path: &Path) -> Result<Vec<PathBuf>, Box<dyn Error>> {
 }
 
 fn create_payload(path: &Path, target: &str, level: i32) -> Result<PathBuf, Box<dyn Error>> {
-    let tmp_dir = env::temp_dir().join(format!("{target}_bundle_tmp"));
-    recreate_dir(&tmp_dir)?;
+    let tmp = env::temp_dir().join(format!("{target}_bundle_tmp"));
+    recreate_dir(&tmp)?;
 
-    let payload = tmp_dir.join(format!("{target}.tar.zstd"));
-    println!("[Packaging] Creating TAR+ZSTD (level {level}) at {}", payload.display());
+    let pay = tmp.join(format!("{target}.tar.zstd"));
+    println!("[Packaging] Creating TAR+ZSTD (level {level}) at {:?}", pay);
 
-    let file_writer = File::create(&payload)?;
-    let mut enc = Encoder::new(file_writer, level)?;
+    let file = File::create(&pay)?;
+    let mut enc = Encoder::new(file, level)?;
     enc.long_distance_matching(true)?;
-    let encoder: Box<dyn Write> = Box::new(enc.auto_finish());
+    let mut encoder = enc.auto_finish();
 
-    let mut builder = tar::Builder::new(encoder);
-    builder.append_dir_all(format!("{target}_bundle"), path)?;
-    Ok(payload)
+    let mut builder = tar_minimal::Builder::new(&mut encoder);
+    builder.append_dir_all(&format!("{target}_bundle"), path)?;
+    Ok(pay)
 }
 
 fn copy_bin_and_deps(file: &Path, bin_dir: &Path, libs_dir: &Path) -> Result<(), Box<dyn Error>> {
-    let dest = bin_dir.join(file.file_name().unwrap());
+    let dest = bin_dir.join(file.file_name().unwrap_or_default());
     fs::copy(file, &dest)?;
     println!("[Staging] Copied binary: {}", dest.display());
 
