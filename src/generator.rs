@@ -81,7 +81,7 @@ pub fn generate_bundle(args: BundleArgs) -> Result<(), Box<dyn Error>> {
     let target = &args.target_binary;
     let deps = rldd_rex(target)?;
 
-    if matches!(deps.elf_type, ElfType::Invalid) && matches!(deps.elf_type, ElfType::Static) {
+    if matches!(deps.elf_type, ElfType::Invalid) || matches!(deps.elf_type, ElfType::Static) {
         return Err("Not Shared ELF binary".into());
     }
 
@@ -153,16 +153,11 @@ pub fn generate_bundle(args: BundleArgs) -> Result<(), Box<dyn Error>> {
     for extra in &args.additional_files {
         coptions.content_only = false;
         let path = cwd.join(extra);
-        if !path.exists() {
-            eprintln!("[Warn] Skipping missing path: {}", path.display());
-            continue;
-        }
-
         if path.is_dir() {
             let parent_name = path
                 .file_name()
                 .and_then(|n| n.to_str())
-                .unwrap_or("unknown_dir");
+                .unwrap_or_default();
             let dest = staging_dir.join(parent_name);
             recreate_dir(&dest)?;
             println!("[Staging] Copying directory: {}", path.display());
