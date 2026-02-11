@@ -7,7 +7,7 @@ mod generator;
 mod runtime;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const DEFAULT_COMPRESSION: i32 = 5;
+const DEFAULT_COMPRESS: i32 = 5;
 
 struct Cli {
     target_binary: Option<PathBuf>,
@@ -20,10 +20,13 @@ struct Cli {
 impl Cli {
     fn parse() -> Result<Self, Box<dyn Error>> {
         let mut args = env::args().skip(1);
+        if args.len() == 0 {
+            return Err("Unknown".to_string().into());
+        }
 
         let mut cli = Self {
             target_binary: None,
-            compression_level: DEFAULT_COMPRESSION,
+            compression_level: DEFAULT_COMPRESS,
             extra_libs: vec![],
             extra_bins: vec![],
             additional_files: vec![],
@@ -34,7 +37,7 @@ impl Cli {
                 "-t" | "--target-binary" => {
                     cli.target_binary = Some(Self::expect_path(&mut args, "--target-binary")?)
                 }
-                "-L" | "--compression-level" => {
+                "-L" | "--compress-level" => {
                     cli.compression_level =
                         Self::expect_value(&mut args, "--compression-level")?.parse()?
                 }
@@ -47,11 +50,7 @@ impl Cli {
                 "-f" | "--extra-files" => cli
                     .additional_files
                     .push(Self::expect_value(&mut args, "--extra-files")?),
-                "-h" | "--help" => {
-                    Self::print_help();
-                    return Err("help displayed".into());
-                }
-                other => return Err(format!("Unknown option: {other}").into()),
+                _ => return Err("Unknown".to_string().into()),
             }
         }
 
@@ -75,37 +74,31 @@ impl Cli {
 
     fn print_help() {
         println!(
-            r#"Rex v{VERSION} - Static Rust Executable Generator and Runtime
+            r#"Rex {VERSION} - Static Rust Executable Generator and Runtime
 
-Usage:
-  rex [OPTIONS]
+Usage: rex [OPTIONS]
 
 Options:
   -t, --target-binary <FILE>       Path to the main target binary to bundle
-  -L, --compression-level <NUM>    Compression level (1–22, default {DEFAULT_COMPRESSION})
+  -L, --compression-level <NUM>    Compression level (1–22, default {DEFAULT_COMPRESS})
   -l, --extra-libs <FILE>          Additional libraries to include
   -b, --extra-bins <FILE>          Additional binaries to include
-  -f, --extra-files <PATH>         Extra files or directories to include
-  -h, --help                       Show this help message"#);
+  -f, --extra-files <PATH>         Extra files or directories to include"#
+        );
     }
 }
 
 fn rex_main(runtime: &mut Runtime) -> Result<(), Box<dyn Error>> {
-    let args_vec: Vec<String> = env::args().collect();
-
     if runtime.is_bundled() {
         return runtime.run();
     }
 
-    if args_vec.len() == 1 {
-        Cli::print_help();
-        return Ok(());
-    }
-
     let cli = match Cli::parse() {
         Ok(c) => c,
-        Err(e) if e.to_string().contains("displayed") => return Ok(()),
-        Err(e) => return Err(e),
+        Err(_) => {
+            Cli::print_help();
+            return Ok(());
+        }
     };
 
     let args = generator::BundleArgs {
