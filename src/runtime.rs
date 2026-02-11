@@ -1,10 +1,10 @@
 use std::error::Error;
-use std::fs;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::mem::size_of;
 use std::path::Path;
 use std::process::Command;
+use std::{env, fs};
 
 const MAGIC_MARKER: [u8; 10] = *b"REX_BUNDLE";
 
@@ -27,8 +27,10 @@ pub struct Runtime {
     executed: bool,
 }
 
+#[cfg(debug_assertions)]
 fn print_help() {
-    println!(r#"Rex Runtime - Self-contained binary runner
+    println!(
+        r#"Rex Runtime - Self-contained binary runner
 
 Extra Options:
   --rex-help     Show this help message
@@ -50,32 +52,36 @@ impl Runtime {
     }
 
     pub fn run(&mut self) -> Result<(), Box<dyn Error>> {
-        let args: Vec<String> = std::env::args().collect();
-
-        if args.len() > 1 {
-            match args[1].as_str() {
-                "--rex-help" => {
-                    print_help();
-                    return Ok(());
-                }
-                "--rex-extract" => {
-                    if let Some(info) = &self.payload_info {
-                        let current_dir = std::env::current_dir()?;
-                        println!("[rex] Extracting bundle to {}", current_dir.display());
-                        Self::extract_payload(info, &current_dir)?;
-                        println!("[rex] Extraction completed successfully!");
+        #[cfg(debug_assertions)]
+        {
+            let args: Vec<String> = env::args().collect();
+            if args.len() > 1 {
+                match args[1].as_str() {
+                    "--rex-help" => {
+                        print_help();
+                        return Ok(());
                     }
-                    return Ok(());
+                    "--rex-extract" => {
+                        if let Some(info) = &self.payload_info {
+                            let current_dir = env::current_dir()?;
+                            println!("[rex] Extracting bundle to {}", current_dir.display());
+                            Self::extract_payload(info, &current_dir)?;
+                            println!("[rex] Extraction completed successfully!");
+                        }
+                        return Ok(());
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
-        self.payload_info.take()
+
+        self.payload_info
+            .take()
             .map_or(Ok(()), |info| self.run_bundled_binary(&info))
     }
 
     fn find_payload_info() -> Result<Option<PayloadInfo>, Box<dyn Error>> {
-        let exec = std::env::current_exe()?;
+        let exec = env::current_exe()?;
         let mut file = File::open(&exec)?;
         let file_size = file.metadata()?.len();
 
@@ -83,10 +89,10 @@ impl Runtime {
             size_of::<BundleMetadata>() as u64 + MAGIC_MARKER.len() as u64;
         const MAX_NAME_LEN: u64 = 256;
 
-        let search_start = file_size.saturating_sub(FIXED_METADATA_SIZE + MAX_NAME_LEN);
-        file.seek(SeekFrom::Start(search_start))?;
+        let start = file_size.saturating_sub(FIXED_METADATA_SIZE + MAX_NAME_LEN);
+        file.seek(SeekFrom::Start(start))?;
 
-        let mut buffer = vec![0u8; (file_size - search_start) as usize];
+        let mut buffer = vec![0u8; (file_size - start) as usize];
         file.read_exact(&mut buffer)?;
 
         let marker_rel_index = buffer
@@ -94,7 +100,7 @@ impl Runtime {
             .rposition(|w| w == MAGIC_MARKER);
 
         let marker_start_in_file = match marker_rel_index {
-            Some(idx) => search_start + idx as u64,
+            Some(idx) => start + idx as u64,
             None => return Ok(None),
         };
 
@@ -107,7 +113,8 @@ impl Runtime {
         file.read_exact(&mut metadata_bytes)?;
 
         let payload_size = u64::from_le_bytes(metadata_bytes[0..8].try_into().unwrap());
-        let target_name_len = u32::from_le_bytes(metadata_bytes[8..12].try_into().unwrap()) as usize;
+        let target_name_len =
+            u32::from_le_bytes(metadata_bytes[8..12].try_into().unwrap()) as usize;
 
         let name_start = metadata_start
             .checked_sub(target_name_len as u64)
@@ -132,20 +139,19 @@ impl Runtime {
     }
 
     fn extract_payload(info: &PayloadInfo, dest_path: &Path) -> Result<(), Box<dyn Error>> {
-        let exec = std::env::current_exe()?;
+        let exec = env::current_exe()?;
         let mut file = File::open(&exec)?;
         file.seek(SeekFrom::Start(info.payload_start_offset))?;
 
         let payload_reader = file.take(info.metadata.payload_size);
         let decoder = zstd::Decoder::new(payload_reader)?;
-        let mut archive = tar::Archive::new(decoder);
-        archive.unpack(dest_path)?;
+        let mut archive = tar_minimal::Decoder::new(decoder);
+        archive.unpack(&dest_path.display().to_string())?;
         Ok(())
     }
 
     fn run_bundled_binary(&mut self, info: &PayloadInfo) -> Result<(), Box<dyn Error>> {
-        let extraction_root = std::env::temp_dir();
-
+        let extraction_root = env::temp_dir();
         Self::extract_payload(info, extraction_root.as_path())?;
 
         let bundle_dir = extraction_root.join(format!("{}_bundle", info.target_binary_name));
@@ -153,24 +159,24 @@ impl Runtime {
         let libs_dir = bundle_dir.join("libs");
         let target_bin_path = bundle_dir.join(&info.target_binary_name);
 
-        if !target_bin_path.exists() {
-            fs::remove_dir_all(&bundle_dir).ok();
-            return Err("Target binary not found".into());
+        let loader = fs::read_dir(&libs_dir)?
+            .filter_map(|entry| entry.ok())
+            .map(|e| e.path())
+            .find(|p| {
+                let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                name.starts_with("ld-linux") || name.starts_with("ld-musl")
+            })
+            .ok_or("No compatible loader found (checked for ld-linux and ld-musl patterns)")?;
+
+        if bin_dir.exists() {
+            let existing = env::var("PATH").unwrap_or_default();
+            let new_path = format!("{}:{}", bin_dir.display(), existing);
+            unsafe {
+                env::set_var("PATH", new_path);
+            }
         }
 
-        let loader_path = ["ld-linux-x86-64.so.2", "ld-musl-x86_64.so.1"]
-            .iter()
-            .map(|f| libs_dir.join(f))
-            .find(|p| p.exists())
-            .ok_or("No compatible loader found (ld-linux or ld-musl)")?;
-
-        let existing_path = std::env::var("PATH").unwrap_or_default();
-        let new_path = format!("{}:{}", bin_dir.display(), existing_path);
-        unsafe {
-            std::env::set_var("PATH", new_path);
-        }
-
-        let args: Vec<String> = std::env::args().skip(1).collect();
+        let args: Vec<String> = env::args().skip(1).collect();
         let mut cmd_args = vec![
             "--library-path".to_string(),
             libs_dir.to_string_lossy().to_string(),
@@ -178,18 +184,18 @@ impl Runtime {
         ];
         cmd_args.extend(args);
 
-        let result = Command::new(loader_path)
+        let result = Command::new(loader)
             .args(&cmd_args)
-            .current_dir(bin_dir)
+            .current_dir(&bundle_dir)
             .status();
 
         self.executed = true;
-        fs::remove_dir_all(&bundle_dir).ok();
+        let _ = fs::remove_dir_all(&bundle_dir);
 
         match result {
-            Ok(status) if status.success() => Ok(()),
-            Ok(status) => Err(format!("Bundled binary exited with code: {}", status).into()),
-            Err(e) => Err(format!("Failed to run bundled binary: {}", e).into()),
+            Ok(s) if s.success() => Ok(()),
+            Ok(_) => Err("fail".into()),
+            Err(e) => Err(format!("Failed to execute: {e}").into()),
         }
     }
 
