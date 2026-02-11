@@ -91,7 +91,7 @@ Options:
 
 fn rex_main(runtime: &mut Runtime) -> Result<(), Box<dyn Error>> {
     if runtime.is_bundled() {
-        return runtime.run();
+        return runtime.run()
     }
 
     let cli = match Cli::parse() {
