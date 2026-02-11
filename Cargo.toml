@@ -1,11 +1,11 @@
 [package]
 name = "Rex"
-version = "2.0.1"
+version = "2.1.0"
 edition = "2024"
 
 [dependencies]
 recursive_copy = "1.1"
-tar = { version = "0.4", default-features = false }
+tar_minimal = "1.0"
 zstd = { version = "0.13", default-features = false }
 rldd-rex = "1.0"
 
