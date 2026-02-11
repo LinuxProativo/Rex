@@ -79,18 +79,23 @@ fn copy_bin_and_deps(file: &Path, bin_dir: &Path, libs_dir: &Path) -> Result<(),
 
 pub fn generate_bundle(args: BundleArgs) -> Result<(), Box<dyn Error>> {
     let target = &args.target_binary;
-    let target_name = target.file_name().unwrap().to_str().unwrap();
+    let deps = rldd_rex(target)?;
+
+    if matches!(deps.elf_type, ElfType::Invalid) && matches!(deps.elf_type, ElfType::Static) {
+        return Err("Not Shared ELF binary".into());
+    }
+
+    let target_name = &target.file_name().unwrap().display().to_string();
+    let staging_dir = env::temp_dir().join(format!("{target_name}_bundle"));
+
+    recreate_dir(&staging_dir)?;
+    let bin_dir = staging_dir.join("bins");
+    let libs_dir = staging_dir.join("libs");
+    fs::create_dir_all(&bin_dir)?;
+    fs::create_dir_all(&libs_dir)?;
+
     let cwd = env::current_dir()?;
     let mut coptions = CopyOptions::default();
-
-    let deps = rldd_rex(target)?;
-    if matches!(deps.elf_type, ElfType::Invalid) {
-        return Err("Not ELF binary".into());
-    }
-    if matches!(deps.elf_type, ElfType::Static) {
-        println!("[Info] Detect static binary.");
-        return Ok(());
-    }
 
     let libs: Vec<PathBuf> = deps
         .deps
@@ -99,18 +104,14 @@ pub fn generate_bundle(args: BundleArgs) -> Result<(), Box<dyn Error>> {
         .filter(|p| p.exists())
         .collect();
 
-    let staging_dir = env::temp_dir().join(format!("{target_name}_bundle"));
-    recreate_dir(&staging_dir)?;
-    let bin_dir = staging_dir.join("bins");
-    let libs_dir = staging_dir.join("libs");
-    fs::create_dir_all(&bin_dir)?;
-    fs::create_dir_all(&libs_dir)?;
-
     println!("[Staging] Copying target binary: {}", target.display());
     fs::copy(target, staging_dir.join(target_name))?;
 
     if !args.extra_bins.is_empty() {
-        println!("[Staging] Processing {} extra binaries...", args.extra_bins.len());
+        println!(
+            "[Staging] Processing {} extra binaries...",
+            args.extra_bins.len()
+        );
         for entry in &args.extra_bins {
             if entry.is_dir() {
                 for f in fs::read_dir(entry)? {
@@ -158,7 +159,8 @@ pub fn generate_bundle(args: BundleArgs) -> Result<(), Box<dyn Error>> {
         }
 
         if path.is_dir() {
-            let parent_name = path.file_name()
+            let parent_name = path
+                .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("unknown_dir");
             let dest = staging_dir.join(parent_name);
@@ -173,9 +175,9 @@ pub fn generate_bundle(args: BundleArgs) -> Result<(), Box<dyn Error>> {
 
     let payload = create_payload(&staging_dir, target_name, args.compression_level)?;
     let payload_size = payload.metadata()?.len();
-    let output = format!("{}.Rex", target_name);
+    let output = format!("{target_name}.Rex",);
 
-    println!("[Output] Creating bundle: {}", output);
+    println!("[Output] Creating bundle: {output}");
     fs::copy(env::current_exe()?, &output)?;
     fs::set_permissions(&output, Permissions::from_mode(0o755))?;
 
@@ -201,9 +203,8 @@ pub fn generate_bundle(args: BundleArgs) -> Result<(), Box<dyn Error>> {
 
     println!(
         "\n[Generator Success]\n  Payload Size: {payload_size} bytes\
-         \n  Metadata Size: {} bytes\n  Bundle created at: {}",
-        size_of::<BundleMetadata>() + target_name.len() + MAGIC_MARKER.len(),
-        output
+         \n  Metadata Size: {} bytes\n  Bundle created at: {output}",
+        size_of::<BundleMetadata>() + target_name.len() + MAGIC_MARKER.len()
     );
     Ok(())
 }
