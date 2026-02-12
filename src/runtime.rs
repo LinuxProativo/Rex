@@ -27,17 +27,6 @@ pub struct Runtime {
     executed: bool,
 }
 
-#[cfg(debug_assertions)]
-fn print_help() {
-    println!(
-        r#"Rex Runtime - Self-contained binary runner
-
-Extra Options:
-  --rex-help     Show this help message
-  --rex-extract  Extract the embedded bundle to the current directory"#
-    );
-}
-
 impl Runtime {
     pub fn new() -> Result<Self, Box<dyn Error>> {
         let payload_info = Self::find_payload_info()?;
@@ -51,26 +40,21 @@ impl Runtime {
         self.payload_info.is_some()
     }
 
+    pub fn has_run(&self) -> bool {
+        self.executed
+    }
+
     pub fn run(&mut self) -> Result<(), Box<dyn Error>> {
         #[cfg(debug_assertions)]
         {
             let args: Vec<String> = env::args().collect();
-            if args.len() > 1 {
-                match args[1].as_str() {
-                    "--rex-help" => {
-                        print_help();
-                        return Ok(());
-                    }
-                    "--rex-extract" => {
-                        if let Some(info) = &self.payload_info {
-                            let current_dir = env::current_dir()?;
-                            println!("[rex] Extracting bundle to {}", current_dir.display());
-                            Self::extract_payload(info, &current_dir)?;
-                            println!("[rex] Extraction completed successfully!");
-                        }
-                        return Ok(());
-                    }
-                    _ => {}
+            if args.len() > 1 && args[1] == "--rex-extract" {
+                if let Some(info) = &self.payload_info {
+                    let current_dir = env::current_dir()?;
+                    println!("[rex] Extracting bundle to {}", current_dir.display());
+                    Self::extract_payload(info, &current_dir)?;
+                    println!("[rex] Extraction completed successfully!");
+                    return Ok(());
                 }
             }
         }
@@ -87,51 +71,47 @@ impl Runtime {
 
         const FIXED_METADATA_SIZE: u64 =
             size_of::<BundleMetadata>() as u64 + MAGIC_MARKER.len() as u64;
-        const MAX_NAME_LEN: u64 = 256;
 
-        let start = file_size.saturating_sub(FIXED_METADATA_SIZE + MAX_NAME_LEN);
-        file.seek(SeekFrom::Start(start))?;
+        let start_pos = file_size.saturating_sub(FIXED_METADATA_SIZE + 256);
+        file.seek(SeekFrom::Start(start_pos))?;
 
-        let mut buffer = vec![0u8; (file_size - start) as usize];
-        file.read_exact(&mut buffer)?;
+        let mut buffer = Vec::new();
+        file.read_to_end(&mut buffer)?;
 
-        let marker_rel_index = buffer
+        let marker_idx = buffer
             .windows(MAGIC_MARKER.len())
             .rposition(|w| w == MAGIC_MARKER);
-
-        let marker_start_in_file = match marker_rel_index {
-            Some(idx) => start + idx as u64,
+        let marker_pos = match marker_idx {
+            Some(idx) => start_pos + idx as u64,
             None => return Ok(None),
         };
 
-        let metadata_start = marker_start_in_file
+        let meta_pos = marker_pos
             .checked_sub(size_of::<BundleMetadata>() as u64)
-            .ok_or("Invalid metadata position")?;
+            .ok_or("Invalid metadata")?;
+        file.seek(SeekFrom::Start(meta_pos))?;
+        let mut meta_bytes = [0u8; size_of::<BundleMetadata>()];
+        file.read_exact(&mut meta_bytes)?;
 
-        file.seek(SeekFrom::Start(metadata_start))?;
-        let mut metadata_bytes = [0u8; size_of::<BundleMetadata>()];
-        file.read_exact(&mut metadata_bytes)?;
+        let payload_size = u64::from_le_bytes(meta_bytes[0..8].try_into().unwrap());
+        let name_len = u32::from_le_bytes(meta_bytes[8..12].try_into().unwrap()) as u64;
 
-        let payload_size = u64::from_le_bytes(metadata_bytes[0..8].try_into().unwrap());
-        let target_name_len =
-            u32::from_le_bytes(metadata_bytes[8..12].try_into().unwrap()) as usize;
-
-        let name_start = metadata_start
-            .checked_sub(target_name_len as u64)
-            .ok_or("Invalid target name position")?;
-        file.seek(SeekFrom::Start(name_start))?;
-        let mut name_bytes = vec![0u8; target_name_len];
+        let name_pos = meta_pos
+            .checked_sub(name_len)
+            .ok_or("Invalid name offset")?;
+        file.seek(SeekFrom::Start(name_pos))?;
+        let mut name_bytes = vec![0u8; name_len as usize];
         file.read_exact(&mut name_bytes)?;
         let target_binary_name = String::from_utf8(name_bytes)?;
 
-        let payload_start_offset = file_size
-            .checked_sub(FIXED_METADATA_SIZE + target_name_len as u64 + payload_size)
+        let payload_start_offset = name_pos
+            .checked_sub(payload_size)
             .ok_or("Invalid payload offset")?;
 
         Ok(Some(PayloadInfo {
             metadata: BundleMetadata {
                 payload_size,
-                target_bin_name_len: target_name_len as u32,
+                target_bin_name_len: name_len as u32,
             },
             payload_start_offset,
             target_binary_name,
@@ -166,7 +146,7 @@ impl Runtime {
                 let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
                 name.starts_with("ld-linux") || name.starts_with("ld-musl")
             })
-            .ok_or("No compatible loader found (checked for ld-linux and ld-musl patterns)")?;
+            .ok_or("No compatible loader found")?;
 
         if bin_dir.exists() {
             let existing = env::var("PATH").unwrap_or_default();
@@ -179,8 +159,8 @@ impl Runtime {
         let args: Vec<String> = env::args().skip(1).collect();
         let mut cmd_args = vec![
             "--library-path".to_string(),
-            libs_dir.to_string_lossy().to_string(),
-            target_bin_path.to_string_lossy().to_string(),
+            libs_dir.to_string_lossy().into(),
+            target_bin_path.to_string_lossy().into(),
         ];
         cmd_args.extend(args);
 
@@ -197,9 +177,5 @@ impl Runtime {
             Ok(_) => Err("fail".into()),
             Err(e) => Err(format!("Failed to execute: {e}").into()),
         }
-    }
-
-    pub fn has_run(&self) -> bool {
-        self.executed
     }
 }

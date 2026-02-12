@@ -1,135 +1,200 @@
 <p align="center">
-  <img src="logo.png" width="256">
+  <img src="logo.png" width="280">
 </p>
 
-<h1 align="center">Rex - Static Rust Executable Generator and Runtime</h1> 
+<h1 align="center">🦖 Rex - Static Rust Executable Generator and Runtime</h1> 
+<h3 align="center">A high-performance, minimalist application bundler for Linux.</h3>
 
-**Rex** is a small Rust project that packs a target binary together with its
-dynamic libraries, extra binaries and files into a single executable.
-The runtime extracts the embedded payload at execution time and runs the
-target program using a suitable loader (glibc or musl) when available.
+<p align="center">
+  <img src="https://img.shields.io/badge/Size-954.6_KiB-brightgreen" alt="Size">
+  <img src="https://img.shields.io/badge/Language-Rust_2024-orange" alt="Rust">
+  <img src="https://img.shields.io/badge/Build-Makefile_/_Cargo-blue" alt="Build">
+  <img src="https://img.shields.io/badge/License-MIT-blue" alt="License">
+</p>
 
-## Summary
+## 📖 Overview
 
-* Language: **Rust**
-* License: **MIT**
-* Packaging output: a single executable file containing the runtime + compressed
-`.tar` payload appended to it
-* Bundle internal directory name convention: `<target_binary_name>_bundle/`
+**Rex** 🦖 is a specialized utility designed to transform dynamic Linux executables
+into portable, self-contained units. Unlike traditional Flatpaks, AppImages or
+containers, Rex targets the binary level by "stitching" the application, its
+shared library dependencies (`.so`), extra helpers, and assets into a single
+executable wrapper.
 
-## Project layout (important files)
+At runtime, **Rex** identifies its own payload, extracts it to a secure temporary
+location, and executes the target using a bundled dynamic loader (`glibc` or `musl`).
+This bypasses "dependency hell" by ensuring the application always runs against
+the exact environment it was packaged with.
 
-* `main.rs` — CLI entrypoint. Detects whether the executable is a runtime
-(contains a payload) or is being run as the builder. Uses `clap` for the CLI.
-* `generator.rs` — The packer/generator that creates the staging directory,
-copies binaries/libs/files, creates a tar and compresses it (zstd),
-and appends the payload and metadata to the runtime executable.
-* `runtime.rs` — The runtime that scans the running executable for the metadata
-marker extracts the payload to a temporary directory, adjusts environment
-variables and executes the embedded binary.
+## ✨ Key Features
 
-## Building
+- **Ultra-Minimalist** 🪶  
+  Total binary footprint of **`~954.6 KiB`**.
 
-### Prerequisites
+- **Zero External Runtime Deps** 🔋  
+  Built with musl for static linking. No ldd or clap required at runtime.
 
-* Rust toolchain (stable). Tested with modern Rust toolchains.
-* Unix-like environment (Linux) for `ldd` dependency detection and loader handling.
-* `ldd` should be available for best automatic dependency detection.
+- **Deep ELF Inspection** 🔍  
+  Automatically resolves shared library trees using internal logic (rldd-rex).
 
-### Build
+- **Universal Compatibility** 🌍  
+  Bundles the required dynamic loader to run across different Linux distributions.
+
+- **Industrial Grade Compression** ⚡  
+  Uses Zstd with Long Distance Matching (LDM) for maximum payload reduction.
+
+- **Clean Execution**🔒  
+  Automatic cleanup of temporary files upon process exit.
+
+## 🏗️ Project Architecture
+
+- `main.rs` **➜ Bootstrap**  
+  Detects execution mode *(Builder vs. Stub)* and handles CLI parsing.
+
+- `generator.rs` **➜ The Packer**  
+  Performs staging, dependency resolution, and footer injection.
+
+- `runtime.rs` **➜ The Stub**  
+  Performs backwards footer scanning and managed execution via the bundled loader.
+
+## 🛠️ Building
+
+**Rex** uses a `Makefile` to orchestrate optimized builds.
+
+### Requisites
+
+- 📌 Rust Stable (2024 Edition).
+- 📌 Linux environment.
+
+### Build Command
 
 ```bash
+make
+# or manually:
 cargo build --release
-# binary: target/release/rex
 ```
 
-## CLI (how to use)
+## 🕹️ CLI Usage (Builder Mode)
 
-Run `rex` (the built binary) as a generator to create a bundle:
+**Rex** features a custom, lightweight argument parser designed for speed and 
+small binary size.
 
 ```bash
-# minimal: specify target binary
-./rex --target-binary ./myapp
+# Basic packaging
+./Rex -t ./my_app
 
-# typical full command
-./rex \
-  --target-binary ./myapp \
-  --compression-level 19 \
-  --extra-libs /usr/lib/x86_64-linux-gnu/libexample.so \
-  --extra-bins ./helpers ./tools \
-  --additional-files config.json README.md
+# Full-featured bundle
+./Rex \
+  -t ./my_app \
+  -L 19 \
+  -l /usr/lib/custom_lib.so \
+  -b ./helper_tool \
+  -f ./config_folder_or_files
 ```
 
-The generator will produce `myapp.Rex` (target file base name + `.Rex`).
+## ⚙️ Options:
 
-### Runtime flags (embedded runtime inside the produced bundle)
+- `-t <file>`: Target binary to bundle **(Required)**.
 
-When the generated bundle runs and contains payload, the runtime inspects
-arguments. The runtime supports:
+- `-L <num>`: Zstd compression level (1–22, default: 5).
 
-* `--rex-help` — prints a short help message.
-* `--rex-extract` — extracts the embedded bundle into the **current working directory**.
+- `-l <file>`: Explicitly include additional shared libraries.
 
-If no runtime flag is given, the runtime will extract to a temporary
-directory and execute the embedded binary automatically.
+- `-b <file>`: Extra binaries **(Rex will also resolve their dependencies)**.
 
-## Bundle internal structure
+- `-f <path>`: Additional files or directories to include in the bundle root.
 
-Inside the compressed `.tar` payload the generator creates a directory named
-`<target>_bundle` with this layout:
+## ⚙️ Advanced Loader Handling
+
+**Rex** ensures portability by managing the Linux dynamic linking process manually:
+
+- **Bundled Loader** 📦  
+  The generator locates the system loader (`ld-linux-x86-64.so.2` or
+  `ld-musl-x86_64.so.1`) and includes it in `libs/`.
+
+- **Execution Hijacking** 🎭  
+  The runtime does not call the binary directly. Instead, it invokes the bundled
+  loader and uses the `--library-path` flag to point to the extracted `libs/`
+  directory. This ensures the target binary cannot link against incompatible
+  host libraries.
+
+- **Path Resolution** 🗺️  
+  The `PATH` environment variable is temporarily prefixed with the internal `bins/`
+  directory, allowing the target binary to call bundled helper tools seamlessly.
+
+## 🏃 Runtime Behavior
+
+When you execute a generated `.Rex` bundle:
+
+1. **Extraction** 📂  
+  The payload is extracted to `/tmp`.
+
+2. **Environment Setup** 🛠️  
+  Prefixes `PATH` with bundled binaries and configures the loader path.
+
+3. **Managed Run** ⚡  
+  Invokes the bundled loader to execute the target binary.
+
+4. **Cleanup** 🧹  
+  Automatically wipes the extraction directory once the app exits.
+
+## 🛠️ Debug Features
+
+- `--rex-extract`: Extracts the bundle into the **current directory**.
+
+> ### *Note: This flag is only available in development builds (debug assertions enabled).*
+
+## 📂 Internal Bundle Layout
+
+The internal structure is optimized for loader resolution:
 
 ```
 <target>_bundle/
-├─ bins/         # helper/extras copied here
-├─ libs/         # shared libraries, and loader (ld-linux or ld-musl)
-├─ <target>      # the target binary copied at the bundle root
-└─ [other files] # additional files or folders copied to the bundle root
+├─ <target>    # Primary executable
+├─ bins/       # Helper binaries (-b)
+├─ libs/       # Shared libraries + Dynamic Loader (ld-linux/musl) + Extra libraries (-l)
+└─ [assets]    # Files added via the -f flag
 ```
 
 The runtime expects exactly this layout and looks up the active bundle
 using the `target` name provided in the appended metadata.
 
-## Loader handling and execution (Linux)
+## ⚠️ Important Considerations
 
-* The generator attempts to copy a system loader into `libs/` (ld-linux or ld-musl)
-if found on the build machine.
-* The runtime chooses the loader from the extracted `libs/` (`ld-linux-x86-64.so.2`
-or `ld-musl-x86_64.so.1`) and invokes it with `--library-path <libs> <target>`
-so the target binary runs using the bundled libraries.
-* The `PATH` environment variable is temporarily prefixed with the extracted
-`bins/` directory so helper tools in `bins` can be resolved.
+- **Not an AppImage Alternative** 🚫  
+  Rex is not designed to be an "AppImage-like" general-purpose desktop format.
+  It is intended for specific use cases where static compilation is unfeasible or
+  impossible **(e.g., closed-source/proprietary libraries or complex C dependencies)**.
 
-## Notes and behaviors
+- **Native Musl Optimization** 💎  
+  Rex is natively configured for the `x86_64-unknown-linux-musl` target. Using Rex
+  in a **musl-based environment (such as Alpine Linux)** to package your apps (`-t`) 
+  yields superior results. Since musl libraries are significantly more lightweight
+  than glibc, the resulting bundled payload is much smaller and the runtime remains
+  completely static with zero reliance on the host.
 
-* The generator uses `ldd` output to detect dynamic dependencies automatically;
-if `ldd` is unavailable or fails, it warns and proceeds (you can pass `--extra-libs`
-to include libraries manually).
-* The generator copies the system loader into `libs/` (if found) to improve
-portability of the bundle.
-* Temporary files used during packaging are cleaned up after the bundle is produced.
-* The runtime extracts to a temporary directory by default, but `--rex-extract`
-writes to the current working directory and prints progress messages.
+- **Execution Overhead** ⏳  
+  Because Rex extracts its payload to a temporary directory at every run, 
+  there is a slight startup delay compared to an original static binary.
 
-## Example: Create and run a bundle
+- **No Extra Environment Support** 🌐  
+  Support for external environment variables to search for resources or dynamic
+  paths will not be implemented. Rex is built for fixed, reliable execution
+  environments.
 
-```bash
-# 1) Build the tool
-cargo build --release
+### 🤝 Contribution Guidelines
 
-# 2) Package your app
-./target/release/rex --target-binary ./target/release/myapp --compression-level 19
+- 🐛 Contributions are welcome only for **bug fixes** and **binary size reduction**.
 
-# 3) Run the bundle
-./myapp.Rex
-```
+- 📉 If you find a lighter `zstd` implementation or crate that reduces the
+  footprint, feel free to submit a PR.
 
-Or extract files manually to inspect contents:
+- 🛑 Feature creep that increases binary size will be rejected
+  to maintain the sub-1MB goal.
 
-```bash
-./myapp.Rex --rex-extract
-# this extracts into the current directory into 'myapp_bundle/' (or similar) depending on the target name
-```
-
-## License
+## 📜 License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for more details.
+
+<p align="center">
+  <i>Developed with precision in Rust. 🦖</i>
+</p>

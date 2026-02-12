@@ -35,22 +35,11 @@ impl Cli {
 
         while let Some(arg) = args.next() {
             match arg.as_str() {
-                "-t" | "--target-binary" => {
-                    cli.target_binary = Some(Self::expect_path(&mut args, "--target-binary")?)
-                }
-                "-L" | "--compress-level" => {
-                    cli.compression_level =
-                        Self::expect_value(&mut args, "--compression-level")?.parse()?
-                }
-                "-l" | "--extra-libs" => cli
-                    .extra_libs
-                    .push(Self::expect_path(&mut args, "--extra-libs")?),
-                "-b" | "--extra-bins" => cli
-                    .extra_bins
-                    .push(Self::expect_path(&mut args, "--extra-bins")?),
-                "-f" | "--extra-files" => cli
-                    .additional_files
-                    .push(Self::expect_value(&mut args, "--extra-files")?),
+                "-t" => cli.target_binary = Some(Self::expect_path(&mut args)?),
+                "-L" => cli.compression_level = Self::expect_value(&mut args)?.parse()?,
+                "-l" => cli.extra_libs.push(Self::expect_path(&mut args)?),
+                "-b" => cli.extra_bins.push(Self::expect_path(&mut args)?),
+                "-f" => cli.additional_files.push(Self::expect_value(&mut args)?),
                 _ => return Err(Cli::print_help().into()),
             }
         }
@@ -58,49 +47,37 @@ impl Cli {
         Ok(cli)
     }
 
-    fn expect_value<I: Iterator<Item = String>>(
-        args: &mut I,
-        name: &str,
-    ) -> Result<String, Box<dyn Error>> {
-        args.next()
-            .ok_or_else(|| format!("missing value for {name}").into())
+    fn expect_value(args: &mut impl Iterator<Item = String>) -> Result<String, Box<dyn Error>> {
+        args.next().ok_or("Missing value".into())
     }
 
-    fn expect_path<I: Iterator<Item = String>>(
-        args: &mut I,
-        name: &str,
-    ) -> Result<PathBuf, Box<dyn Error>> {
-        Ok(PathBuf::from(Self::expect_value(args, name)?))
+    fn expect_path(args: &mut impl Iterator<Item = String>) -> Result<PathBuf, Box<dyn Error>> {
+        Ok(PathBuf::from(Self::expect_value(args)?))
     }
 
     fn print_help() -> String {
         format!(
-            r#"Rex {VERSION} - Static Rust Executable Generator and Runtime
-
-Usage: rex [OPTIONS]
-
+            "Rex {VERSION} - static Rust EXecutable generator and runtime\n
+Usage: rex <options>\n
 Options:
-  -t, --target-binary <FILE>     Path to the main target binary to bundle
-  -L, --compression-level <NUM>  Compression level (1–22, default {DEFAULT_COMPRESS})
-  -l, --extra-libs <FILE>        Additional libraries to include
-  -b, --extra-bins <FILE>        Additional binaries to include
-  -f, --extra-files <PATH>       Extra files or directories to include"#
+  -t <file>  Path to the main target binary to bundle
+  -L <num>   Compression level (1–22, default {DEFAULT_COMPRESS})
+  -l <file>  Additional libraries to include
+  -b <file>  Additional binaries to include
+  -f <path>  Extra files or folders to include"
         )
     }
 }
 
 fn rex_main(runtime: &mut Runtime) -> Result<(), Box<dyn Error>> {
     if runtime.is_bundled() {
-        return runtime.run()
+        return runtime.run();
     }
 
-    let cli = match Cli::parse() {
-        Ok(c) => c,
-        Err(e) => return Err(e.into()),
-    };
+    let cli = Cli::parse()?;
 
     let args = generator::BundleArgs {
-        target_binary: cli.target_binary.unwrap_or_default(),
+        target_binary: cli.target_binary.ok_or("Error: -t <file> is required")?,
         compression_level: cli.compression_level,
         extra_libs: cli.extra_libs,
         extra_bins: cli.extra_bins,
@@ -111,15 +88,20 @@ fn rex_main(runtime: &mut Runtime) -> Result<(), Box<dyn Error>> {
 }
 
 fn main() {
-    match Runtime::new() {
-        Ok(mut runtime) => {
-            if let Err(e) = rex_main(&mut runtime) {
+    let i = match Runtime::new() {
+        Ok(mut runtime) => match rex_main(&mut runtime) {
+            Ok(_) => 0,
+            Err(e) => {
                 if !runtime.has_run() {
                     eprintln!("{e}");
                 }
-                exit(1);
+                1
             }
+        },
+        Err(e) => {
+            eprintln!("Error: {e}");
+            1
         }
-        Err(e) => eprintln!("Error creating runtime: {e}"),
-    }
+    };
+    exit(i);
 }

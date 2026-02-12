@@ -1,6 +1,16 @@
+Wed Feb 11 22:36:30 -03 2026:
+    - update version 3.0.0
+    - use tar_minimal crate
+    - fix bug for run loader command
+    - fix search interpreter
+    - fix and simplify help view
+    - fix search parameters
+    - fix exit code for run commands
+    - fix bug for search correct ld-linux
+    - more clean code
 Sun Dec 14 16:04:27 -03 2025:
     - upload version 2.0.1
-    - use rldd-rex 1.0.3
+    - use rldd-rex crate
 Mon Nov 10 20:19:24 -03 2025:
     - upload version 2.0.0
     - optimize flags for size

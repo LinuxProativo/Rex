@@ -51,7 +51,7 @@ fn create_payload(path: &Path, target: &str, level: i32) -> Result<PathBuf, Box<
     recreate_dir(&tmp)?;
 
     let pay = tmp.join(format!("{target}.tar.zstd"));
-    println!("[Packaging] Creating TAR+ZSTD (level {level}) at {:?}", pay);
+    println!("[Packaging] Creating TAR+ZSTD (level {level})");
 
     let file = File::create(&pay)?;
     let mut enc = Encoder::new(file, level)?;
@@ -81,11 +81,11 @@ pub fn generate_bundle(args: BundleArgs) -> Result<(), Box<dyn Error>> {
     let target = &args.target_binary;
     let deps = rldd_rex(target)?;
 
-    if matches!(deps.elf_type, ElfType::Invalid) || matches!(deps.elf_type, ElfType::Static) {
+    if matches!(deps.elf_type, ElfType::Invalid | ElfType::Static) {
         return Err("Not Shared ELF binary".into());
     }
 
-    let target_name = &target.file_name().unwrap().display().to_string();
+    let target_name = target.file_name().unwrap().to_str().ok_or("Invalid UTF-8")?;
     let staging_dir = env::temp_dir().join(format!("{target_name}_bundle"));
 
     recreate_dir(&staging_dir)?;
@@ -197,8 +197,7 @@ pub fn generate_bundle(args: BundleArgs) -> Result<(), Box<dyn Error>> {
     fs::remove_dir_all(&staging_dir).ok();
 
     println!(
-        "\n[Generator Success]\n  Payload Size: {payload_size} bytes\
-         \n  Metadata Size: {} bytes\n  Bundle created at: {output}",
+        "\n[Generator Success]\n  Payload Size: {payload_size} bytes\n  Metadata Size: {} bytes",
         size_of::<BundleMetadata>() + target_name.len() + MAGIC_MARKER.len()
     );
     Ok(())
